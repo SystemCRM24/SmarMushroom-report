@@ -5,9 +5,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Отчет</title>
     <script src="//api.bitrix24.com/api/v1/"></script>
-    <script src="bx24wrapper" defer></script>
+    <script src="wrapper.js"></script>
     <script src="index.js" defer></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
 </head>
 <body>
+
+    <div id="loader" class="d-flex justify-content-center align-items-center vh-100">
+        <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+            <span class="visually-hidden">Загрузка...</span>
+        </div>
+    </div>
+
+    <div id="table-container" class="d-none">
+        <table class="table table-hover table-bordered mb-0">
+            <thead class="table-dark">
+                <tr>
+                    <th class="text-nowrap px-3">Исполнитель</th>
+                    <th class="text-nowrap px-3">Сделка</th>
+                    <th class="w-100 px-3">Услуга</th> <!-- Растягивается -->
+                    <th class="text-nowrap px-3 text-center">Количество</th>
+                    <th class="text-nowrap px-3">Прайс за шт.</th>
+                    <th class="text-nowrap px-3">Сумма</th>
+                </tr>
+            </thead>
+            <tbody id="table-body">
+            </tbody>
+            <tfoot class="table-light border-top-2">
+                <tr>
+                    <td colspan="5" class="text-end fw-bold px-3">ИТОГО:</td>
+                    <td id="total-amount" class="text-nowrap px-3 fw-bold"></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
 </body>
 </html>
