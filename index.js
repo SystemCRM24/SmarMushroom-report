@@ -155,7 +155,7 @@ BX24.init(() => {
                 const splited = serviceName.split(' ');
                 
                 tr.append(createTd(getUserLinkElement(splited.pop(), usersData)));
-                tr.append(createTd(getDealLinkElement(deal.ID)));
+                tr.append(createTd(getDealLinkElement(deal)));
                 tr.append(createTd(splited.join(" ")));
 
                 const qty = service.QUANTITY;
@@ -193,11 +193,11 @@ BX24.init(() => {
         return lastName;
     }
 
-    function getDealLinkElement(dealId) {
+    function getDealLinkElement(deal) {
         return $('<a>', {
-            href: `https://${domain}/crm/deal/details/${dealId}/`,
+            href: `https://${domain}/crm/deal/details/${deal.ID}/`,
             target: '_blank',
-            text: dealId,
+            text: deal.TITLE,
             class: 'text-decoration-none fw-medium'
         });
     }
