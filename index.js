@@ -1,31 +1,117 @@
-BX24.init(async () => {
+BX24.init(() => {
     const BX24W = new BX24Wrapper();
-    const urlParams = new URLSearchParams(window.location.search);
-    const domain = urlParams.get('DOMAIN');
+    const dealFieldMap = {
+        productionEnd: "UF_CRM_1770212738813",
+    };
 
-    const getUsers = async () => {
-        const users = await BX24W.callMethod("user.get", {});
-        return Object.fromEntries(users.map(u => [u.LAST_NAME, u]));
+    const usersData = {};
+    const domain = (new URLSearchParams(window.location.search)).get('DOMAIN');
+
+    const loader = $('#loader');
+    const tableContainer = $('#table-container');
+    const tableBody = $('#table-body');
+    const totalAmountEl = $('#total-amount');
+
+    const showLoading = () => loader.removeClass('d-none');
+    const hideLoading = () => loader.addClass('d-none');
+    const showTable = () => tableContainer.removeClass('d-none');
+    const hideTable = () => tableContainer.addClass('d-none');
+
+    function clearTable() {
+        tableBody.empty();
+        totalAmountEl.text("");
     }
 
-    /**
-     * Формирует номральные гомосексуальные связи сущностей, как в старом добром SQL.
-     * Сделка -> товарные позиции (услуги) -> Сами услуги непосредственно.
-     * @returns {} - объект, который реализует эту структуру.
-     */
-    const getProductRows = async() => {
-        const p = {filter: {CATEGORY_ID: 0}, select: ['ID']}
-        // Получаем сделки
-        const deals = await BX24W.callListMethod('crm.deal.list', p);
+    $('#responsible-select').selectize({
+        plugins: ["remove_button"],
+        multi: true,
+        maxItems: null,
+        searchField: 'name',
+        placeholder: "Выберите ответственных...",
+        hideSelected: true,
+    });
+
+    async function setupUsers() {
+        const users = await BX24W.callMethod("user.get", {});
+        const widget = $('#responsible-select')[0].selectize;
+        for ( const user of users ) {
+            usersData[user.LAST_NAME] = user;
+            widget.addOption({value: user.LAST_NAME, text: user.LAST_NAME});
+            widget.addItem(user.LAST_NAME);
+        }
+        hideLoading();
+    }
+    setupUsers();
+
+    $('#date-range').daterangepicker({
+        startDate: moment().subtract(30, 'days'),
+        endDate: moment(),
+        opens: 'right',
+        autoUpdateInput: true,
+        locale: {
+            format: 'DD.MM.YYYY',
+            separator: " - ",
+            applyLabel: "Выбрать",
+            cancelLabel: "Отмена",
+            fromLabel: "От",
+            toLabel: "До",
+            customRangeLabel: "Свой интервал",
+            daysOfWeek: ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"],
+            monthNames: ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"],
+            firstDay: 1
+        }
+    });
+
+    function getFilterData() {
+        const responsibles = new Set($('#responsible-select').val() || []);
+        const drp = $('#date-range').data('daterangepicker');
+        return {
+            responsibles: responsibles,
+            from: drp.startDate.toISOString(),
+            to: drp.endDate.toISOString()
+        };
+    }
+
+    $('#apply-filter').on('click', async () => {
+        showLoading();
+        hideTable();
+        clearTable();
+        const filter = getFilterData();
+        const deals = await getDeals(filter);
+        if ( deals.length ) {
+            const [result, productRows, productRowsCalls] = await getProductRows(deals);
+            await handleVariations(filter, result, productRows, productRowsCalls);
+            fillTable(result);
+        }
+        showTable();
+        hideLoading();
+    })
+
+    function getDeals(filter) {
+        const params = {
+            select: ['ID', 'TITLE'],
+            filter: {
+                [`>=${dealFieldMap.productionEnd}`]: filter.from,
+                [`<=${dealFieldMap.productionEnd}`]: filter.to
+            }
+        }
+        return BX24W.callListMethod('crm.deal.list', params);
+    }
+
+    // Формируем запрос на товарные позиции и готовим итоговый объект
+    async function getProductRows(deals) {
         const result = {};
         const productRowsCalls = [];
-        // Формируем запрос на товарные позиции и готовим итоговый объект
         for ( const deal of deals ) {
             result[deal.ID] = deal;
             productRowsCalls.push(['crm.deal.productrows.get', {id: deal.ID}]);
         }
         const productRows = await BX24W.callLongBatch(productRowsCalls, false);
-        // Дальше начинается магия работы с указателями. Понимайте как хотите.
+        return [result, productRows, productRowsCalls];
+    }
+
+    // Дальше начинается магия работы с указателями. Понимайте как хотите.
+    async function handleVariations(filter, result, productRows, productRowsCalls) {
         const services = {};
         const servicesCalls = [];
         for ( const index in productRows) {
@@ -34,8 +120,11 @@ BX24.init(async () => {
             deal.services = [];
             const products = productRows[index];
             for ( const product of products) {
-                // Нужны только услуги
-                if ( product.TYPE !== 7 ) {
+                const isServiceType = product.TYPE === 7;
+                const managerLastName = (product.ORIGINAL_PRODUCT_NAME || "").split(' ').at(-1);
+                const isCorrectResponsible = filter.responsibles.has(managerLastName);
+                // Нужны только услуги и Правильные ответственные
+                if ( !isServiceType || !isCorrectResponsible ) {
                     continue;
                 }
                 deal.services.push(product);
@@ -47,74 +136,69 @@ BX24.init(async () => {
             }
         }
         // Получаем вариации (услуги непосредственно) и разбираем их
-        const variations = await BX24W.callLongBatch(servicesCalls, false);
-        for ( const line of variations ) {
-            const service = line.service;
-            services[service.id].forEach(p => p.parent = service);
+        if ( servicesCalls.length ) {
+                    const variations = await BX24W.callLongBatch(servicesCalls, false);
+            for ( const line of variations ) {
+                const service = line.service;
+                services[service.id].forEach(p => p.parent = service);
+            }
         }
-        return result;
     }
 
-    const createTd = (data, className = "text-nowrap px-3") => {
-        const td = document.createElement('td');
-        if ( data instanceof HTMLElement) {
-            td.appendChild(data);
-        } else {
-            td.textContent = data;
+    function fillTable(products) {
+        let result = 0;
+        for ( const deal of Object.values(products) ) {
+            for ( const service of deal.services ) {
+                const tr = $('<tr>');
+
+                const serviceName = service?.parent?.name || service.ORIGINAL_PRODUCT_NAME;
+                const splited = serviceName.split(' ');
+                
+                tr.append(createTd(getUserLinkElement(splited.pop(), usersData)));
+                tr.append(createTd(getDealLinkElement(deal.ID)));
+                tr.append(createTd(splited.join(" ")));
+
+                const qty = service.QUANTITY;
+                tr.append(createTd(service.QUANTITY, 'px-3'));
+
+                const priceRub = service?.parent?.property108?.value || "0|RUB";
+                const price = Number.parseFloat(priceRub);
+                tr.append(createTd(price));
+
+                const sum = price * qty;
+                tr.append(createTd(sum.toFixed(2)));
+
+                result += sum;
+                tableBody.append(tr);
+            }
         }
-        td.className = className;
-        return td;
+        totalAmountEl.text(result.toFixed(2));
     }
 
-    const getUserLinkElement = (lastName, users) => {
+    function createTd(data, className = "text-nowrap px-3") {
+        const $td = $('<td>').addClass(className);
+        return $td.append(data);
+    }
+
+    function getUserLinkElement(lastName, users) {
         const user = users[lastName];
         if (user && user.ID) {
-            const link = document.createElement('a');
-            link.href = `https://${domain}/company/personal/user/${user.ID}/`;
-            link.target = "_blank";
-            link.textContent = lastName;
-            link.classList.add('text-decoration-none', 'fw-medium');
-            return link;
+            return $('<a>', {
+                href: `https://${domain}/company/personal/user/${user.ID}/`,
+                target: '_blank',
+                text: lastName,
+                class: 'text-decoration-none fw-medium'
+            });
         }
         return lastName;
     }
 
-    const getDealLinkElement = (dealId) => {
-        const link = document.createElement('a');
-        link.href = `https://${domain}/crm/deal/details/${dealId}/`;
-        link.target = "_blank";
-        link.textContent = dealId;
-        link.classList.add('text-decoration-none', 'fw-medium');
-        return link;
+    function getDealLinkElement(dealId) {
+        return $('<a>', {
+            href: `https://${domain}/crm/deal/details/${dealId}/`,
+            target: '_blank',
+            text: dealId,
+            class: 'text-decoration-none fw-medium'
+        });
     }
-
-    const main = async() => {
-        const [users, products] = await Promise.all([getUsers(), getProductRows()]);
-        const tbody = document.getElementById('table-body');
-        let result = 0;
-        // console.log(users, products);
-        for ( const deal of Object.values(products) ) {
-            for ( const service of deal.services ) {
-                const serviceName = service?.parent?.name || service.ORIGINAL_PRODUCT_NAME;
-                const splited = serviceName.split(' ');
-                const tr = document.createElement('tr');
-                tr.appendChild(createTd(getUserLinkElement(splited.pop(), users)));
-                tr.appendChild(createTd(getDealLinkElement(deal.ID)));
-                tr.appendChild(createTd(splited.join(" ")));
-                const qty = service.QUANTITY;
-                tr.appendChild(createTd(service.QUANTITY, 'px-3'));
-                const priceRub = service?.parent?.property108?.value || "0|RUB";
-                const price = Number.parseFloat(priceRub);
-                tr.appendChild(createTd(price));
-                const sum = price * qty;
-                tr.appendChild(createTd(sum.toFixed(2)));
-                result += sum;
-                tbody.appendChild(tr);
-            }
-        }
-        document.getElementById('total-amount').textContent = result.toFixed(2);
-        document.getElementById('loader').classList.replace('d-flex', 'd-none');
-        document.getElementById('table-container').classList.remove('d-none');
-    }
-    await main();
-});
+})
